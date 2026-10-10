@@ -1,63 +1,87 @@
-const cheerio = require('cheerio');
+const cheerio = require("cheerio");
 
-// Timeout'lu fetch
-async function get(url, ms = 7000) {
-  const c = new AbortController();
-  const t = setTimeout(() => c.abort(), ms);
+async function get(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+
   try {
-    const r = await fetch(url, {
-      signal: c.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
     });
-    return await r.text();
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return await response.text();
   } finally {
-    clearTimeout(t);
+    clearTimeout(timer);
   }
 }
 
-// Başlıktan kalite/ses tahmini (ortak yardımcı)
-function guess(text = '') {
-  const t = text.toLowerCase();
-  const quality = (t.match(/2160p|4k|1080p|720p|480p/) || ['?'])[0];
-  const audio = /dublaj|turkce|türkçe/.test(t)
-    ? 'TR Dublaj'
-    : /altyaz/.test(t)
-    ? 'Altyazılı'
-    : /dual/.test(t)
-    ? 'Dual'
-    : 'Orijinal';
-  return { quality, audio };
+async function getDizigomCatalog(path, type) {
+  const html = await get(`https://www.dizigom.news${path}`);
+  const $ = cheerio.load(html);
+  const items = [];
+  const seen = new Set();
+
+  $("a[href]").each((_, element) => {
+    const a = $(element);
+    const href = a.attr("href");
+
+    if (!href) return;
+
+    const url = new URL(href, "https://www.dizigom.news");
+    const validPath =
+      type === "movie"
+        ? /^\/film\/[^/]+\/?$/.test(url.pathname)
+        : /^\/diziler\/[^/]+\/?$/.test(url.pathname) ||
+          /^\/anime\/[^/]+\/?$/.test(url.pathname);
+
+    if (!validPath || seen.has(url.href)) return;
+
+    const title =
+      a.attr("title") ||
+      a.find("img").attr("alt") ||
+      a.find("h2, h3, h4").first().text().trim() ||
+      a.text().trim();
+
+    const poster =
+      a.find("img").attr("data-src") ||
+      a.find("img").attr("data-lazy-src") ||
+      a.find("img").attr("src");
+
+    if (!title || title.length < 2) return;
+
+    seen.add(url.href);
+
+    items.push({
+      id: `dizigom:${type}:${encodeURIComponent(url.pathname)}`,
+      type,
+      name: title.trim(),
+      poster: poster
+        ? new URL(poster, "https://www.dizigom.news").href
+        : undefined,
+      description: "Dizigom kataloğundan"
+    });
+  });
+
+  return items.slice(0, 100);
 }
 
-// Her site: { name, find({title, year, season, episode}) -> [{url, label}] }
-// ORNEK-SITE kısmını ve seçicileri kendi sitene göre değiştir.
-// Yeni site eklemek = diziye yeni bir obje eklemek.
-module.exports = [
-  {
-    name: 'Site1',
-    async find({ title, season, episode }) {
-      const q = encodeURIComponent(title);
-      const html = await get(`https://ORNEK-SITE1.com/?s=${q}`);
-      const $ = cheerio.load(html);
-
-      // 1) arama sonucunun ilk linki
-      let link = $('.result a, article a').first().attr('href');
-      if (!link) return [];
-      if (season) link += `?sezon=${season}&bolum=${episode}`; // sitene göre uyarla
-
-      // 2) sayfadaki video kaynakları
-      const page = cheerio.load(await get(link));
-      const out = [];
-      page('video source, a[href$=".mp4"], a[href$=".m3u8"]').each((_, el) => {
-        const url = page(el).attr('src') || page(el).attr('href');
-        const text = page(el).text() + ' ' + (page(el).attr('title') || '') + ' ' + url;
-        if (url) out.push({ url, ...guess(text) });
-      });
-      return out;
-    },
+module.exports = {
+  async movies() {
+    return getDizigomCatalog("/filmler/", "movie");
   },
 
-  // { name: 'Site2', async find(ctx) { ... } },
-  // ...
-  // { name: 'Site10', async find(ctx) { ... } },
-];
+  async series() {
+    return getDizigomCatalog("/dizi-izle/", "series");
+  },
+
+  async anime() {
+    return getDizigomCatalog("/animes/", "series");
+  }
+};
