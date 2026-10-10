@@ -1,28 +1,29 @@
+
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const sites = require("./sites");
 
 const manifest = {
   id: "community.film-kaynak-addon",
-  version: "2.0.0",
-  name: "Film Kaynak Tarayıcı",
-  description: "Film, dizi ve anime katalogları",
+  version: "2.1.0",
+  name: "Film Kaynakları",
+  description: "Siteye göre ayrılmış film, dizi ve anime katalogları",
   resources: ["catalog", "meta", "stream"],
   types: ["movie", "series"],
   catalogs: [
     {
       type: "movie",
-      id: "film-kaynak-movies",
-      name: "Filmler"
+      id: "dizigom-movies",
+      name: "Dizigom - Filmler"
     },
     {
       type: "series",
-      id: "film-kaynak-series",
-      name: "Diziler"
+      id: "dizigom-series",
+      name: "Dizigom - Diziler"
     },
     {
       type: "series",
-      id: "film-kaynak-anime",
-      name: "Anime"
+      id: "dizigom-anime",
+      name: "Dizigom - Anime"
     }
   ]
 };
@@ -33,11 +34,15 @@ builder.defineCatalogHandler(async ({ type, id }) => {
   try {
     let metas = [];
 
-    if (id === "film-kaynak-movies" && type === "movie") {
+    if (id === "dizigom-movies" && type === "movie") {
       metas = await sites.movies();
-    } else if (id === "film-kaynak-series" && type === "series") {
+    }
+
+    if (id === "dizigom-series" && type === "series") {
       metas = await sites.series();
-    } else if (id === "film-kaynak-anime" && type === "series") {
+    }
+
+    if (id === "dizigom-anime" && type === "series") {
       metas = await sites.anime();
     }
 
@@ -67,8 +72,8 @@ builder.defineMetaHandler(async ({ type, id }) => {
 
     if (!response.ok) return { meta: null };
 
-    const html = await response.text();
-    const $ = require("cheerio").load(html);
+    const cheerio = require("cheerio");
+    const $ = cheerio.load(await response.text());
 
     const name =
       $('meta[property="og:title"]').attr("content") ||
@@ -94,13 +99,12 @@ builder.defineMetaHandler(async ({ type, id }) => {
       }
     };
   } catch (error) {
-    console.error("Meta hatası:", error.message);
+    console.error("Detay hatası:", error.message);
     return { meta: null };
   }
 });
 
 builder.defineStreamHandler(async () => {
-  // Yetkili oynatma kaynakları eklenene kadar boş döner.
   return { streams: [] };
 });
 
