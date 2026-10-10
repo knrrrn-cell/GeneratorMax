@@ -1,79 +1,109 @@
-const http = require('http');
-const sites = require('./sites');
-
-const PORT = process.env.PORT || 3000;
-const TTL = 20 * 60 * 1000; // 20 dk önbellek
-const cache = new Map();
+const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const sites = require("./sites");
 
 const manifest = {
-  id: 'community.multisite.addon',
-  version: '1.0.0',
-  name: 'Çoklu Site Tarayıcı',
-  description: 'Seçili sitelerden görüntü ve ses seçeneklerini listeler',
-  resources: ['stream'],
-  types: ['movie', 'series'],
-  idPrefixes: ['tt'],
-  catalogs: [],
+  id: "community.film-kaynak-addon",
+  version: "2.0.0",
+  name: "Film Kaynak Tarayıcı",
+  description: "Film, dizi ve anime katalogları",
+  resources: ["catalog", "meta", "stream"],
+  types: ["movie", "series"],
+  catalogs: [
+    {
+      type: "movie",
+      id: "film-kaynak-movies",
+      name: "Filmler"
+    },
+    {
+      type: "series",
+      id: "film-kaynak-series",
+      name: "Diziler"
+    },
+    {
+      type: "series",
+      id: "film-kaynak-anime",
+      name: "Anime"
+    }
+  ]
 };
 
-// IMDb id'den başlık al (Cinemeta)
-async function getTitle(type, imdb) {
-  const r = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${imdb}.json`);
-  const j = await r.json();
-  return { title: j.meta?.name, year: j.meta?.year };
-}
+const builder = new addonBuilder(manifest);
 
-async function findStreams(type, id) {
-  const key = `${type}:${id}`;
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.t < TTL) return hit.data;
+builder.defineCatalogHandler(async ({ type, id }) => {
+  try {
+    let metas = [];
 
-  const [imdb, season, episode] = id.split(':');
-  const { title, year } = await getTitle(type, imdb);
-  if (!title) return [];
-
-  const ctx = { title, year, season, episode };
-  const results = await Promise.allSettled(
-    sites.map(async (s) => {
-      const list = await s.find(ctx);
-      return list.map((x) => ({
-        name: s.name,
-        title: `${x.quality} | ${x.audio}\n${s.name}`,
-        url: x.url,
-      }));
-    })
-  );
-
-  const seen = new Set();
-  const streams = results
-    .flatMap((r, i) => {
-      if (r.status === 'rejected') console.log(`${sites[i].name} hata:`, r.reason?.message);
-      return r.status === 'fulfilled' ? r.value : [];
-    })
-    .filter((s) => !seen.has(s.url) && seen.add(s.url));
-
-  cache.set(key, { t: Date.now(), data: streams });
-  return streams;
-}
-
-http
-  .createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'application/json');
-    const path = decodeURIComponent(req.url.split('?')[0]);
-
-    try {
-      if (path === '/manifest.json') return res.end(JSON.stringify(manifest));
-
-      const m = path.match(/^\/stream\/(movie|series)\/(.+)\.json$/);
-      if (m) return res.end(JSON.stringify({ streams: await findStreams(m[1], m[2]) }));
-
-      if (path === '/') return res.end(JSON.stringify({ ok: true }));
-      res.statusCode = 404;
-      res.end('{}');
-    } catch (e) {
-      console.log('hata:', e.message);
-      res.end(JSON.stringify({ streams: [] }));
+    if (id === "film-kaynak-movies" && type === "movie") {
+      metas = await sites.movies();
+    } else if (id === "film-kaynak-series" && type === "series") {
+      metas = await sites.series();
+    } else if (id === "film-kaynak-anime" && type === "series") {
+      metas = await sites.anime();
     }
-  })
-  .listen(PORT, () => console.log('Addon hazır:', PORT));
+
+    return { metas };
+  } catch (error) {
+    console.error("Katalog hatası:", error.message);
+    return { metas: [] };
+  }
+});
+
+builder.defineMetaHandler(async ({ type, id }) => {
+  try {
+    const match = id.match(/^dizigom:(movie|series):(.+)$/);
+
+    if (!match) return { meta: null };
+
+    const path = decodeURIComponent(match[2]);
+    const url = new URL(path, "https://www.dizigom.news");
+
+    if (url.origin !== "https://www.dizigom.news") {
+      return { meta: null };
+    }
+
+    const response = await fetch(url.href, {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
+
+    if (!response.ok) return { meta: null };
+
+    const html = await response.text();
+    const $ = require("cheerio").load(html);
+
+    const name =
+      $('meta[property="og:title"]').attr("content") ||
+      $("h1").first().text().trim() ||
+      $("title").text().trim();
+
+    const poster =
+      $('meta[property="og:image"]').attr("content") ||
+      $('meta[name="twitter:image"]').attr("content");
+
+    if (!name) return { meta: null };
+
+    return {
+      meta: {
+        id,
+        type,
+        name,
+        poster: poster
+          ? new URL(poster, url.href).href
+          : undefined,
+        description:
+          $('meta[property="og:description"]').attr("content") || ""
+      }
+    };
+  } catch (error) {
+    console.error("Meta hatası:", error.message);
+    return { meta: null };
+  }
+});
+
+builder.defineStreamHandler(async () => {
+  // Yetkili oynatma kaynakları eklenene kadar boş döner.
+  return { streams: [] };
+});
+
+serveHTTP(builder.getInterface(), {
+  port: process.env.PORT || 7000
+});
