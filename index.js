@@ -13,17 +13,17 @@ const manifest = {
     {
       type: "movie",
       id: "dizigom-movies",
-      name: "Dizigom - Filmler"
+      name: "Dizigom"
     },
     {
       type: "series",
       id: "dizigom-series",
-      name: "Dizigom - Diziler"
+      name: "Dizigom"
     },
     {
       type: "series",
       id: "dizigom-anime",
-      name: "Dizigom - Anime"
+      name: "Dizigom Anime"
     }
   ]
 };
